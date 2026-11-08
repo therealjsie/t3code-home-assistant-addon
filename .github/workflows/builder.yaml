@@ -1,4 +1,5 @@
 name: Build add-on
+# Re-trigger main publishing for add-on 0.1.12
 
 on:
   push:
