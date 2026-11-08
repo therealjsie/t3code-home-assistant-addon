@@ -58,10 +58,15 @@ RUN curl -fsSL -o /usr/local/bin/ha \
         "https://github.com/home-assistant/cli/releases/latest/download/ha_${BUILD_ARCH}" \
     && chmod +x /usr/local/bin/ha
 
-# ha-mcp: Home Assistant MCP server (https://github.com/homeassistant-ai/ha-mcp)
-RUN python3 -m venv /opt/ha-mcp \
-    && /opt/ha-mcp/bin/pip install --no-cache-dir "ha-mcp==${HA_MCP_VERSION}" \
-    && ln -s /opt/ha-mcp/bin/ha-mcp /usr/local/bin/ha-mcp
+# ha-mcp >=9 requires Python >=3.13; Debian Bookworm's python3 is too old.
+# Install a standalone Python 3.13 via uv without replacing system Python.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && /root/.local/bin/uv python install 3.13 \
+    && /root/.local/bin/uv venv --python 3.13 /opt/ha-mcp \
+    && /root/.local/bin/uv pip install --python /opt/ha-mcp/bin/python "ha-mcp==${HA_MCP_VERSION}" \
+    && ln -s /opt/ha-mcp/bin/ha-mcp /usr/local/bin/ha-mcp \
+    && /opt/ha-mcp/bin/python --version
 
 COPY rootfs/ /
 RUN chmod +x /run.sh /opt/t3code/*.sh /usr/local/bin/ha-mcp-server
