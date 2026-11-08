@@ -95,10 +95,17 @@ function startFlow(name) {
     }
     // Device-code flows print a short code the user types into the browser.
     if (!s.code) {
-      const m = clean.match(/(?:code|enter)[^\n]{0,40}?\b([A-Z0-9]{4,5}-[A-Z0-9]{4,5}|[A-Z0-9]{8,9})\b/);
-      if (m) s.code = m[1];
+      // The device code is entered on OpenAI's website, not submitted to this CLI.
+      const lines = clean.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (!/(?:device|one.time|verification|enter|code)/i.test(lines[i])) continue;
+        const nearby = lines.slice(i, i + 3).join(" ");
+        const m = nearby.match(/\b([A-Z0-9]{4}-[A-Z0-9]{5}|[A-Z0-9]{5}-[A-Z0-9]{4}|[A-Z0-9]{9})\b/i);
+        if (m) { s.code = m[1].toUpperCase(); break; }
+      }
     }
-    if (s.url && s.state === "starting" && /code/i.test(clean)) s.state = "waiting_for_code";
+    if (name === "codex" && (s.code || s.url)) s.state = "waiting_for_code";
+    else if (s.url && s.state === "starting" && /code/i.test(clean)) s.state = "waiting_for_code";
     if (flow.done.test(clean)) s.state = "done";
     if (s.state === "submitted" && /invalid|rejected|expired|error|failed|denied/i.test(clean.slice(-400))) {
       s.state = "waiting_for_code";
@@ -115,7 +122,8 @@ function startFlow(name) {
     }
     s.state = "failed";
     s.error = s.error || `Login process exited with code ${code}. See the add-on log.`;
-    console.log(`[status] ${name} login output:\n` + stripAnsi(s.output));
+    // Avoid logging authentication output, which may include one-time codes.
+    console.log(`[status] ${name} login failed (exit code ${code}).`);
   });
   return s;
 }
@@ -123,6 +131,7 @@ function startFlow(name) {
 function submitCode(name, code) {
   const s = sessions[name];
   if (!active(s)) return { ok: false, error: "No login in progress. Click 'Sign in' first." };
+  if (name === "codex") return { ok: false, error: "Enter the device code on the OpenAI webpage." };
   s.error = null;
   s.state = "submitted";
   s.proc.stdin.write(code.trim() + "\n");
@@ -219,7 +228,7 @@ const server = http.createServer(async (req, res) => {
     const [, name, action] = m;
     if (action === "start") {
       const s = startFlow(name);
-      for (let i = 0; i < 80 && !s.url && s.state === "starting"; i++) {
+      for (let i = 0; i < 80 && !(name === "codex" ? s.code : s.url) && s.state === "starting"; i++) {
         await new Promise((r) => setTimeout(r, 250));
       }
       return json(res, 200, publicSession(name));
@@ -414,6 +423,16 @@ function saveInputs(){ for (const n of ["t3","claude","codex"]) { const e=docume
 async function refresh(){ try { st = await api("/api/status"); saveInputs(); renderConnect(); renderProviders(); } catch (e) { document.getElementById("connect").textContent = "Status server unreachable: " + e; } }
 
 function flowHtml(name, s){
+  if (name === "codex") {
+    let h = '<p><b>Codex device authentication</b></p>' +
+      '<p>Open <a href="https://auth.openai.com/codex/device" target="_blank" rel="noopener">https://auth.openai.com/codex/device</a> and sign in.</p>';
+    h += s.code
+      ? '<p>Enter this code <b>on the OpenAI webpage</b>:</p><p class="big">'+esc(s.code)+'</p>'
+      : '<p class="muted">Waiting for Codex CLI to generate a device code. If none appears, check the add-on logs for errors.</p>';
+    h += '<p class="muted">Do not paste a code back into this add-on. Authorization is detected automatically.</p>';
+    if (s.error) h += '<p class="bad">'+esc(s.error)+'</p>';
+    return h;
+  }
   let h = '<p><b>Step 1.</b> Open this link on any device with a browser and sign in:</p>' +
     (s.url ? '<p><a href="'+esc(s.url)+'" target="_blank" rel="noopener">'+esc(s.url)+'</a></p>' : '<p class="muted">Waiting for the login link…</p>');
   if (s.code) h += '<p>If asked for a code, enter: <span class="big">'+esc(s.code)+'</span></p>';
