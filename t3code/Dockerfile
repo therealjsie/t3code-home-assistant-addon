@@ -37,7 +37,7 @@ RUN npm install -g --no-fund --no-audit \
         "t3@${T3_VERSION}" \
         @anthropic-ai/claude-code@2.1.319 \
         @openai/codex@0.167.0 \
-        opencode-ai@1.19.4 \
+        opencode-ai@1.19.5 \
     && npm cache clean --force \
     && t3 --version
 
