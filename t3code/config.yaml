@@ -1,7 +1,7 @@
 ---
 name: "T3 Code (Codex Fix)"
 description: "Headless T3 Code server for remote-controlled AI coding agents (Claude Code, Codex, OpenCode) with Home Assistant MCP"
-version: "0.1.9"
+version: "0.1.10"
 slug: "t3code_codex_fix"
 url: "https://github.com/therealjsie/t3code-home-assistant-addon"
 image: "ghcr.io/therealjsie/t3code-{arch}"
