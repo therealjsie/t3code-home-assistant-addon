@@ -1,3 +1,9 @@
+## 0.1.13
+
+- LAN pairing card shows a newly created token, expiration, copy controls, and a locally generated QR code.
+- Create fresh 15-minute one-time tokens without restarting T3 Code. Used, revoked, and expired tokens are cleared automatically.
+- Enter the Home Assistant LAN address and exposed port to build a reachable pairing link instead of using the container IP.
+
 ## 0.1.8
 
 - Development option `debug_shell` exposing POST /api/diag/exec (off by default).
