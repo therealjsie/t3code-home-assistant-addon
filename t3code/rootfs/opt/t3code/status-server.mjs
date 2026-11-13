@@ -8,10 +8,12 @@ import http from "node:http";
 import os from "node:os";
 import fs from "node:fs";
 import { spawn, execFile } from "node:child_process";
+import { createPairingManager } from "./pairing.mjs";
 
 const PORT = 8099;
 const MODE = process.env.T3CODE_REMOTE_MODE || "t3_connect";
 const LAN_PORT = process.env.T3CODE_LAN_PORT || "3773";
+const pairing = createPairingManager(run);
 
 // ---- command helpers ------------------------------------------------------
 
@@ -214,6 +216,23 @@ const server = http.createServer(async (req, res) => {
   let path = url.pathname;
   if (ingressPath && path.startsWith(ingressPath)) path = path.slice(ingressPath.length) || "/";
 
+  if (path === "/api/pairing" && ["GET", "POST"].includes(req.method)) {
+    if (MODE !== "lan") return json(res, 409, { error: "Pairing is available in LAN mode." });
+    // Ingress uses a same-origin POST; reject cross-site browser submissions.
+    if (req.method === "POST" && req.headers["sec-fetch-site"] === "cross-site") {
+      return json(res, 403, { error: "Cross-site pairing requests are not allowed." });
+    }
+    try {
+      const credential = req.method === "POST" ? await pairing.create() : await pairing.status();
+      return json(res, 200, { pairing: credential });
+    } catch (error) {
+      return json(res, 503, { error: error.message });
+    }
+  }
+  if (req.method === "GET" && path === "/qrcode.js") {
+    res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+    return res.end(fs.readFileSync(new URL("./vendor/qrcode.js", import.meta.url)));
+  }
   if (req.method === "GET" && path === "/api/status") {
     return json(res, 200, {
       mode: MODE,
@@ -384,7 +403,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "GET" && (path === "/" || path === "")) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-    return res.end(PAGE.replace("__BASE__", ingressPath));
+    return res.end(PAGE.replaceAll("__BASE__", String(ingressPath).replace(/[<>&"']/g, "")));
   }
   res.writeHead(404);
   res.end("not found");
@@ -409,18 +428,106 @@ const PAGE = `<!doctype html>
 </style></head><body>
 <h1>T3 Code add-on</h1>
 <div id="connect" class="card">Loading…</div>
+<div id="pairing" class="card" hidden>
+  <h2>LAN pairing token</h2>
+  <p>Create a one-time token to connect a browser or T3 Code app. Tokens expire after 15 minutes.</p>
+  <button id="create-pairing" onclick="createPairing()">Create new token</button>
+  <p id="pairing-error" class="bad" role="alert"></p>
+  <p id="pairing-empty" class="muted">Create a token to show it here. Startup tokens are not shown. Tokens created here remain visible until used, revoked, expired, or the add-on restarts.</p>
+  <div id="pairing-detail" hidden>
+    <label for="pairing-token">Pairing token</label>
+    <input id="pairing-token" readonly autocomplete="off" spellcheck="false">
+    <button class="secondary" onclick="copyPairing('pairing-token')">Copy token</button>
+    <p id="pairing-expiry" class="muted"></p>
+    <label for="pairing-address">Home Assistant LAN address (including exposed port)</label>
+    <input id="pairing-address" placeholder="http://192.168.178.128:3773" oninput="updatePairingLink()" spellcheck="false">
+    <p class="muted">Use your Home Assistant IP or hostname, rather than the container IP. If the Network settings map a different port, enter that port.</p>
+    <p id="pairing-link-error" class="warn"></p>
+    <div id="pairing-link-detail" hidden>
+      <label for="pairing-url">Pairing URL</label>
+      <input id="pairing-url" readonly autocomplete="off">
+      <button class="secondary" onclick="copyPairing('pairing-url')">Copy pairing URL</button>
+      <p>Scan this QR code on the device you want to connect:</p>
+      <div id="pairing-qr" aria-label="Pairing URL QR code"></div>
+    </div>
+    <p class="warn">The token, link, and QR code grant access to this server. Keep them private.</p>
+  </div>
+</div>
 <div id="providers" class="card"></div>
 <div class="muted">This page only manages remote access and sign-ins. Use the T3 Code app on your phone or desktop to work with agents.</div>
+<script src="__BASE__/qrcode.js"></script>
 <script>
 const BASE = "__BASE__";
 const api = (p, opt) => fetch(BASE + p, opt).then(r => r.json());
 const post = (p, body) => api(p, {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify(body||{})});
 let st = null;
+let pairingCredential = null;
+let pairingBusy = false;
 const pending = {};
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function row(l,v){ return '<div class="row"><span>'+l+'</span><span class="'+(v?"ok":"bad")+'">'+(v?"yes":"no")+'</span></div>'; }
 function saveInputs(){ for (const n of ["t3","claude","codex"]) { const e=document.getElementById("code-"+n); if(e) pending[n]=e.value; } }
-async function refresh(){ try { st = await api("/api/status"); saveInputs(); renderConnect(); renderProviders(); } catch (e) { document.getElementById("connect").textContent = "Status server unreachable: " + e; } }
+async function refresh(){ try { st = await api("/api/status"); saveInputs(); renderConnect(); renderProviders(); await refreshPairing(); } catch (e) { document.getElementById("connect").textContent = "Status server unreachable: " + e; } }
+
+function showPairing(value){
+  pairingCredential = value;
+  document.getElementById("pairing-detail").hidden = !value;
+  document.getElementById("pairing-empty").hidden = !!value;
+  document.getElementById("pairing-token").value = value ? value.token : "";
+  document.getElementById("pairing-expiry").textContent = value ? "Expires: " + new Date(value.expiresAt).toLocaleString() : "";
+  updatePairingLink();
+}
+async function refreshPairing(){
+  document.getElementById("pairing").hidden = st.mode !== "lan";
+  if (st.mode !== "lan" || pairingBusy) return;
+  const before = pairingCredential;
+  const result = await api("/api/pairing");
+  // Do not overwrite a newly generated token with an older poll response.
+  if (pairingBusy || before !== pairingCredential) return;
+  document.getElementById("pairing-error").textContent = result.error || "";
+  showPairing(result.error ? null : result.pairing);
+}
+async function createPairing(){
+  if (pairingBusy) return;
+  pairingBusy = true;
+  const button = document.getElementById("create-pairing");
+  button.disabled = true; button.textContent = "Creating…";
+  try {
+    const result = await post("/api/pairing");
+    if (result.error) throw new Error(result.error);
+    document.getElementById("pairing-error").textContent = "";
+    showPairing(result.pairing);
+  } catch (error) { document.getElementById("pairing-error").textContent = error.message; }
+  finally { pairingBusy = false; button.disabled = false; button.textContent = "Create new token"; }
+}
+function updatePairingLink(){
+  const detail = document.getElementById("pairing-link-detail");
+  const qr = document.getElementById("pairing-qr");
+  detail.hidden = true; qr.replaceChildren();
+  document.getElementById("pairing-url").value = "";
+  const error = document.getElementById("pairing-link-error");
+  error.textContent = "";
+  if (!pairingCredential) return;
+  const address = document.getElementById("pairing-address").value.trim();
+  if (!address) { error.textContent = "Enter your Home Assistant LAN address to build the link and QR code."; return; }
+  try {
+    const base = new URL(address);
+    if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.pathname !== "/" || base.search || base.hash) throw new Error();
+    const link = base.origin + "/pair#token=" + encodeURIComponent(pairingCredential.token);
+    document.getElementById("pairing-url").value = link;
+    detail.hidden = false;
+    const code = qrcode(0, "M"); code.addData(link); code.make();
+    qr.innerHTML = code.createSvgTag({cellSize: 4, margin: 16, scalable: true});
+    const svg = qr.querySelector("svg");
+    svg.style.cssText = "display:block;background:white;width:260px;max-width:100%;height:auto";
+    svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Scan to pair with this T3 Code server");
+  } catch { error.textContent = "Enter an HTTP or HTTPS address with a port, without a path (for example http://192.168.178.128:3773)."; }
+}
+async function copyPairing(id){
+  const input = document.getElementById(id);
+  try { await navigator.clipboard.writeText(input.value); }
+  catch { input.focus(); input.select(); document.getElementById("pairing-error").textContent = "Clipboard unavailable. The value is selected; copy it manually."; }
+}
 
 function flowHtml(name, s){
   if (name === "codex") {
@@ -448,7 +555,7 @@ function renderConnect(){
   const c = st.connect || {}; const s = st.session; const el = document.getElementById("connect");
   if (st.mode === "lan") {
     el.innerHTML = '<h2>LAN pairing mode</h2>' +
-      '<p>The server listens on port <code>'+esc(st.lan.port)+'</code>. The pairing URL and token are printed in the add-on <b>Log</b> tab at each start.</p>' +
+      '<p>The server listens on port <code>'+esc(st.lan.port)+'</code>. Create a fresh pairing token below without restarting the server.</p>' +
       '<p class="muted">Replace the host in the pairing URL with your Home Assistant IP. Container interfaces: '+esc(st.lan.ifaces.join(", ")||"n/a")+'</p>';
     return;
   }

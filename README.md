@@ -6,9 +6,9 @@ Run a headless [T3 Code](https://github.com/pingdotgg/t3code) server on your Hom
 box and control AI coding agents (Claude Code, Codex, OpenCode) from the T3 Code app on your
 phone or desktop through **T3 Connect**.
 
-There is no T3 Code UI on Home Assistant itself. The add-on only exposes a small status page
-to sign in to T3 Connect. Everything else, including provider logins, is done remotely from
-the T3 Code app.
+The add-on exposes a small status page for T3 Connect and provider sign-ins. In LAN mode,
+it also creates and displays pairing tokens, links, and QR codes. Use the T3 Code app
+remotely to work with agents.
 
 ## Install
 

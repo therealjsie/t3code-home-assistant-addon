@@ -56,6 +56,21 @@ start the log prints a connection string, token, and pairing URL. The host in th
 container's address, so replace it with your Home Assistant IP before pasting it into the
 T3 Code app. Treat the pairing URL as a password.
 
+In the **T3 Code** sidebar panel, click **Create new token** to issue a fresh one-time token
+without restarting the server. The panel shows the token and its 15-minute expiration.
+Enter your Home Assistant LAN address with the exposed port (for example,
+`http://192.168.178.128:3773`) to show a copyable pairing URL and QR code. Scan the QR code
+from the device you want to connect. QR codes are generated locally; no external service
+receives the token.
+
+The panel displays the latest token it created, including across page reloads. It checks
+T3's active pairing list and clears the display after the token is used, revoked, or
+expired. Plaintext tokens are kept only in status-server memory, so after an add-on restart
+create a new one. Tokens printed at startup or created elsewhere are not returned by T3's
+pairing list command. Creating a new token does not revoke earlier unused tokens; they
+remain valid until used, revoked in T3, or expired. Protect the token, URL, and QR code as
+passwords.
+
 ## Home Assistant MCP
 
 The add-on ships `ha-mcp` and points each installed provider at it through the launcher
